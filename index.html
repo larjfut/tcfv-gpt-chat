@@ -1,0 +1,53 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>TCFV AI Assistant</title>
+  <style>
+    body { font-family: Arial, sans-serif; background: #f8f8fc; padding: 20px; }
+    #chat-box { max-width: 600px; margin: auto; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px; box-shadow: 0 0 10px rgba(0,0,0,0.05); }
+    #messages { height: 400px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; border-radius: 6px; background: #fff; }
+    .message { margin-bottom: 10px; }
+    .user { font-weight: bold; color: #614b79; }
+    .bot { color: #333; }
+    #user-input { width: 100%; padding: 10px; border: 1px solid #aaa; border-radius: 5px; margin-top: 10px; }
+    #send-btn { margin-top: 10px; background: #614b79; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; }
+  </style>
+</head>
+<body>
+  <div id="chat-box">
+    <h2>Ask the TCFV Assistant</h2>
+    <div id="messages"></div>
+    <textarea id="user-input" rows="3" placeholder="Type your question here..."></textarea>
+    <button id="send-btn">Send</button>
+  </div>
+
+  <script>
+    const messagesDiv = document.getElementById('messages');
+    const input = document.getElementById('user-input');
+    const sendBtn = document.getElementById('send-btn');
+
+    async function sendMessage() {
+      const userMessage = input.value.trim();
+      if (!userMessage) return;
+
+      messagesDiv.innerHTML += `<div class='message user'>You: ${userMessage}</div>`;
+      input.value = '';
+
+      const response = await fetch('/api/chat', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ message: userMessage })
+      });
+      const data = await response.json();
+
+      messagesDiv.innerHTML += `<div class='message bot'>TCFV Assistant: ${data.reply}</div>`;
+      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+    }
+
+    sendBtn.addEventListener('click', sendMessage);
+    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }});
+  </script>
+</body>
+</html>
