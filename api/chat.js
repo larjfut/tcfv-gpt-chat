@@ -6,9 +6,16 @@ import crypto from 'crypto';
 
 const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
 
-// Load vector store from file
-const storePath = path.resolve(process.cwd(), 'vector_store.json');
-const vectorStore = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
+const storePath = path.join(process.cwd(), 'vector_store.json');
+let vectorStore = [];
+
+try {
+  const rawData = fs.readFileSync(storePath, 'utf-8');
+  vectorStore = JSON.parse(rawData);
+} catch (err) {
+  console.error("Failed to load vector store:", err.message);
+}
+
 
 // Embed a string using OpenAI
 async function embedText(text) {
