@@ -65,12 +65,13 @@ export default async function handler(req, res) {
 
     const reply = completion.choices[0].message.content;
     res.status(200).json({ reply });
- } catch (err) {
+} catch (err) {
   console.error("Server error:", err);
   res.setHeader("Content-Type", "application/json");
   res.status(500).json({
-    error: 'Server error occurred',
-    details: err.message || 'No details available'
+    error: "A server error occurred.",
+    details: err.message || "No details provided"
   });
 }
+
 
