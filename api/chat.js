@@ -1,77 +1,58 @@
 // File: /api/chat.js
-import fs from 'fs';
-import path from 'path';
 import { OpenAI } from 'openai';
-import crypto from 'crypto';
 
-const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+const openai = new OpenAI({
+  apiKey: process.env.OPENAI_API_KEY
+});
 
-const storePath = path.join(process.cwd(), 'vector_store.json');
-let vectorStore = [];
-
-try {
-  const rawData = fs.readFileSync(storePath, 'utf-8');
-  vectorStore = JSON.parse(rawData);
-} catch (err) {
-  console.error("Failed to load vector store:", err.message);
-}
-
-
-// Embed a string using OpenAI
-async function embedText(text) {
-  const response = await openai.embeddings.create({
-    model: 'text-embedding-3-small',
-    input: text
-  });
-  return response.data[0].embedding;
-}
-
-// Calculate cosine similarity
-function cosineSimilarity(vecA, vecB) {
-  const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
-  const normA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
-  const normB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
-  return dotProduct / (normA * normB);
-}
+const ASSISTANT_ID = 'asst_jKfwAJceQdVe0J9YEUtSkVuu';
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  if (req.method !== 'POST') {
+    return res.status(405).json({ error: 'Method not allowed' });
+  }
 
   const { message } = req.body;
-  if (!message) return res.status(400).json({ error: 'Message is required' });
+  if (!message) {
+    return res.status(400).json({ error: 'Message is required' });
+  }
 
   try {
-    const embeddedQuestion = await embedText(message);
+    // 1. Create a thread
+    const thread = await openai.beta.threads.create();
 
-    // Rank all chunks by similarity
-    const scored = vectorStore.map(chunk => {
-      const score = cosineSimilarity(chunk.embedding, embeddedQuestion);
-      return { ...chunk, score };
+    // 2. Add user message to thread
+    await openai.beta.threads.messages.create(thread.id, {
+      role: 'user',
+      content: message
     });
 
-    // Get top 5 most relevant chunks
-    const topChunks = scored.sort((a, b) => b.score - a.score).slice(0, 5);
-    const context = topChunks.map(c => c.text).join('\n---\n');
-
-    const systemPrompt = `You are the TCFV Assistant: a trauma-informed, knowledgeable, respectful, and accurate guide for survivors of family violence and those helping them. Use the information below to answer the user’s question. If unsure, say so honestly.\n\nKnowledge Base:\n${context}`;
-
-    const completion = await openai.chat.completions.create({
-      model: 'gpt-4-1106-preview',
-      messages: [
-        { role: 'system', content: systemPrompt },
-        { role: 'user', content: message }
-      ]
+    // 3. Run the assistant
+    const run = await openai.beta.threads.runs.create(thread.id, {
+      assistant_id: ASSISTANT_ID
     });
 
-    const reply = completion.choices[0].message.content;
+    // 4. Wait for the run to complete (polling)
+    let runStatus = run;
+    while (runStatus.status !== 'completed' && runStatus.status !== 'failed') {
+      await new Promise(resolve => setTimeout(resolve, 1000));
+      runStatus = await openai.beta.threads.runs.retrieve(thread.id, run.id);
+    }
+
+    if (runStatus.status === 'failed') {
+      throw new Error('Run failed: ' + runStatus.last_error?.message);
+    }
+
+    // 5. Retrieve the assistant's message
+    const messages = await openai.beta.threads.messages.list(thread.id);
+    const reply = messages.data[0].content[0].text.value;
+
     res.status(200).json({ reply });
-} catch (err) {
-  console.error("Server error:", err);
-  res.setHeader("Content-Type", "application/json");
-  res.status(500).json({
-    error: "A server error occurred.",
-    details: err.message || "No details provided"
-  });
+  } catch (err) {
+    console.error('❌ Assistant error:', err);
+    res.status(500).json({
+      error: 'A server error occurred.',
+      details: err.message
+    });
+  }
 }
-
-
