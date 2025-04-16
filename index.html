@@ -1,53 +1,69 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-  <meta charset="UTF-8" />
-  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
   <title>TCFV AI Assistant</title>
   <style>
-    body { font-family: Arial, sans-serif; background: #f8f8fc; padding: 20px; }
-    #chat-box { max-width: 600px; margin: auto; background: white; border: 1px solid #ddd; border-radius: 8px; padding: 15px; box-shadow: 0 0 10px rgba(0,0,0,0.05); }
-    #messages { height: 400px; overflow-y: auto; border: 1px solid #ccc; padding: 10px; border-radius: 6px; background: #fff; }
-    .message { margin-bottom: 10px; }
-    .user { font-weight: bold; color: #614b79; }
-    .bot { color: #333; }
-    #user-input { width: 100%; padding: 10px; border: 1px solid #aaa; border-radius: 5px; margin-top: 10px; }
-    #send-btn { margin-top: 10px; background: #614b79; color: white; border: none; padding: 10px 15px; border-radius: 5px; cursor: pointer; }
+    body { font-family: Arial, sans-serif; background: #f6f6fb; color: #222; display: flex; justify-content: center; padding: 2rem; }
+    .container { max-width: 600px; width: 100%; background: white; border-radius: 8px; padding: 1.5rem; box-shadow: 0 0 10px rgba(0,0,0,0.05); }
+    h2 { margin-bottom: 1rem; }
+    #chat { border: 1px solid #ddd; padding: 1rem; height: 300px; overflow-y: auto; margin-bottom: 1rem; background: #fafafa; white-space: pre-wrap; }
+    form { display: flex; gap: 0.5rem; }
+    input[type="text"] { flex: 1; padding: 0.75rem; font-size: 1rem; border: 1px solid #ccc; border-radius: 4px; }
+    button { padding: 0.75rem 1.25rem; font-size: 1rem; background: #614b79; color: white; border: none; border-radius: 4px; cursor: pointer; }
+    a { color: #614b79; text-decoration: underline; }
   </style>
 </head>
 <body>
-  <div id="chat-box">
+  <div class="container">
     <h2>Ask the TCFV Assistant</h2>
-    <div id="messages"></div>
-    <textarea id="user-input" rows="3" placeholder="Type your question here..."></textarea>
-    <button id="send-btn">Send</button>
+    <div id="chat"></div>
+    <form id="chat-form">
+      <input type="text" id="user-input" placeholder="Type your question here..." required />
+      <button type="submit">Send</button>
+    </form>
   </div>
 
   <script>
-    const messagesDiv = document.getElementById('messages');
+    const form = document.getElementById('chat-form');
+    const chatBox = document.getElementById('chat');
     const input = document.getElementById('user-input');
-    const sendBtn = document.getElementById('send-btn');
 
-    async function sendMessage() {
-      const userMessage = input.value.trim();
-      if (!userMessage) return;
-
-      messagesDiv.innerHTML += `<div class='message user'>You: ${userMessage}</div>`;
+    form.addEventListener('submit', async (e) => {
+      e.preventDefault();
+      const userMessage = input.value;
+      appendMessage('You', userMessage);
       input.value = '';
 
-      const response = await fetch('/api/chat', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ message: userMessage })
-      });
-      const data = await response.json();
+      try {
+        const response = await fetch('/api/chat', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ message: userMessage })
+        });
 
-      messagesDiv.innerHTML += `<div class='message bot'>TCFV Assistant: ${data.reply}</div>`;
-      messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        const data = await response.json();
+        appendMessage('TCFV Assistant', data.reply);
+      } catch (err) {
+        appendMessage('TCFV Assistant', 'Sorry, something went wrong.');
+      }
+    });
+
+    function appendMessage(sender, text) {
+      const div = document.createElement('div');
+      div.innerHTML = `<strong>${sender}:</strong> ${renderMarkdown(text)}`;
+      chatBox.appendChild(div);
+      chatBox.scrollTop = chatBox.scrollHeight;
     }
 
-    sendBtn.addEventListener('click', sendMessage);
-    input.addEventListener('keydown', (e) => { if (e.key === 'Enter' && !e.shiftKey) { e.preventDefault(); sendMessage(); }});
+    function renderMarkdown(md) {
+      return md
+        .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+        .replace(/\*(.*?)\*/g, '<em>$1</em>')
+        .replace(/\n/g, '<br>')
+        .replace(/\[([^\]]+)\]\(([^)]+)\)/g, '<a href="$2" target="_blank" rel="noopener noreferrer">$1</a>');
+    }
   </script>
 </body>
 </html>
