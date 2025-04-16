@@ -1,86 +1,65 @@
-let threadId = null; // Optional: store in session if you want chat memory
+// File: /api/chat.js
+import fs from 'fs';
+import path from 'path';
+import { OpenAI } from 'openai';
+import crypto from 'crypto';
+
+const openai = new OpenAI({ apiKey: process.env.OPENAI_API_KEY });
+
+// Load vector store from file
+const storePath = path.resolve(process.cwd(), 'vector_store.json');
+const vectorStore = JSON.parse(fs.readFileSync(storePath, 'utf-8'));
+
+// Embed a string using OpenAI
+async function embedText(text) {
+  const response = await openai.embeddings.create({
+    model: 'text-embedding-3-small',
+    input: text
+  });
+  return response.data[0].embedding;
+}
+
+// Calculate cosine similarity
+function cosineSimilarity(vecA, vecB) {
+  const dotProduct = vecA.reduce((sum, a, i) => sum + a * vecB[i], 0);
+  const normA = Math.sqrt(vecA.reduce((sum, a) => sum + a * a, 0));
+  const normB = Math.sqrt(vecB.reduce((sum, b) => sum + b * b, 0));
+  return dotProduct / (normA * normB);
+}
 
 export default async function handler(req, res) {
-  if (req.method !== 'POST') {
-    return res.status(405).json({ error: 'Method not allowed' });
-  }
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const { message } = req.body;
-
-  if (!message || typeof message !== 'string') {
-    return res.status(400).json({ error: 'Message is required and must be a string' });
-  }
+  if (!message) return res.status(400).json({ error: 'Message is required' });
 
   try {
-    // 1. Create thread if not created yet
-    if (!threadId) {
-      const threadRes = await fetch('https://api.openai.com/v1/threads', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-          'Content-Type': 'application/json'
-        }
-      });
-      const threadData = await threadRes.json();
-      threadId = threadData.id;
-    }
+    const embeddedQuestion = await embedText(message);
 
-    // 2. Add user message to thread
-    await fetch(`https://api.openai.com/v1/threads/${threadId}/messages`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        role: 'user',
-        content: message
-      })
+    // Rank all chunks by similarity
+    const scored = vectorStore.map(chunk => {
+      const score = cosineSimilarity(chunk.embedding, embeddedQuestion);
+      return { ...chunk, score };
     });
 
-    // 3. Run the assistant using your Assistant ID
-    const runRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs`, {
-      method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
-        'Content-Type': 'application/json'
-      },
-      body: JSON.stringify({
-        assistant_id: 'asst_jKfwAJceQdVe0J9YEUtSkVuu',
-        instructions: "instructions: "Answer using trauma-informed language and always format responses using markdown (e.g., bold for headings, bullet points, numbered lists, and links). Keep it readable and visually clean."
-      })
+    // Get top 5 most relevant chunks
+    const topChunks = scored.sort((a, b) => b.score - a.score).slice(0, 5);
+    const context = topChunks.map(c => c.text).join('\n---\n');
+
+    const systemPrompt = `You are the TCFV Assistant: a trauma-informed, knowledgeable, respectful, and accurate guide for survivors of family violence and those helping them. Use the information below to answer the user’s question. If unsure, say so honestly.\n\nKnowledge Base:\n${context}`;
+
+    const completion = await openai.chat.completions.create({
+      model: 'gpt-4-1106-preview',
+      messages: [
+        { role: 'system', content: systemPrompt },
+        { role: 'user', content: message }
+      ]
     });
 
-    const runData = await runRes.json();
-    const runId = runData.id;
-
-    // 4. Poll for completion
-    let status = 'in_progress';
-    while (status !== 'completed' && status !== 'failed') {
-      const statusRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs/${runId}`, {
-        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
-      });
-      const statusData = await statusRes.json();
-      status = statusData.status;
-
-      if (status === 'in_progress') {
-        await new Promise(resolve => setTimeout(resolve, 1000)); // wait 1s
-      }
-    }
-
-    // 5. Get the assistant's latest message
-    const messagesRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/messages`, {
-      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
-    });
-
-    const messagesData = await messagesRes.json();
-    const reply = messagesData.data
-      .reverse()
-      .find(m => m.role === 'assistant')?.content[0]?.text?.value || 'No response from assistant.';
-
+    const reply = completion.choices[0].message.content;
     res.status(200).json({ reply });
-  } catch (error) {
-    console.error('Assistants API error:', error);
-    res.status(500).json({ error: 'Internal server error' });
+  } catch (err) {
+    console.error(err);
+    res.status(500).json({ error: 'Error generating response' });
   }
 }
