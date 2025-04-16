@@ -47,7 +47,7 @@ export default async function handler(req, res) {
       },
       body: JSON.stringify({
         assistant_id: 'asst_jKfwAJceQdVe0J9YEUtSkVuu',
-        instructions: "Answer using trauma-informed language. Prioritize file knowledge first."
+        instructions: "instructions: "Answer using trauma-informed language and always format responses using markdown (e.g., bold for headings, bullet points, numbered lists, and links). Keep it readable and visually clean."
       })
     });
 
