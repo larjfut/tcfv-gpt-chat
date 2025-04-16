@@ -5,9 +5,18 @@ export default async function handler(req, res) {
 
   const { message } = req.body;
 
-  if (!message) {
-    return res.status(400).json({ error: 'Message is required' });
+  if (!message || typeof message !== 'string') {
+    return res.status(400).json({ error: 'Message is required and must be a string' });
   }
+
+  // Basic prompt injection protection
+  const sanitizedMessage = message.replace(/(ignore|disregard|forget).*?(instruction|system|prompt)/gi, '[REDACTED]');
+
+  // Naive Spanish detection
+  const isSpanish = /\b(hola|ayuda|gracias|por favor|necesito|violencia|seguro|segura)\b/i.test(sanitizedMessage);
+  const spanishNote = isSpanish
+    ? '\n\nNota: El usuario está escribiendo en español. Responde en español a menos que se indique lo contrario.'
+    : '';
 
   try {
     const response = await fetch('https://api.openai.com/v1/chat/completions', {
@@ -17,7 +26,7 @@ export default async function handler(req, res) {
         'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
       },
       body: JSON.stringify({
-        model: 'gpt-4-1106-preview',
+        model: 'gpt-4o',
         messages: [
           {
             role: 'system',
@@ -80,21 +89,27 @@ If the user begins speaking in Spanish, switch to Spanish unless asked otherwise
 
 Keep your responses readable and brief—use bullet points and short paragraphs.
 
-Always provide links and phone numbers in the response.`
+Always provide links and phone numbers in the response.${spanishNote}`
           },
           {
             role: 'user',
-            content: message
+            content: sanitizedMessage
           }
         ]
       })
     });
 
+    if (!response.ok) {
+      const errorText = await response.text();
+      console.error('OpenAI API error:', response.status, errorText);
+      return res.status(response.status).json({ error: 'OpenAI API request failed.' });
+    }
+
     const data = await response.json();
     const reply = data.choices?.[0]?.message?.content || 'Sorry, I could not generate a response.';
     res.status(200).json({ reply });
   } catch (error) {
-    console.error(error);
+    console.error('Internal server error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 }
