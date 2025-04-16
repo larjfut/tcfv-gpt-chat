@@ -1,31 +1,6 @@
-// Store IPs and timestamps (reset every server restart — fine for Vercel edge functions)
-const ipRateLimitMap = new Map();
-
-function isRateLimited(ip) {
-  const now = Date.now();
-  const windowMs = 60 * 1000; // 1 minute
-  const maxRequests = 5;
-
-  if (!ipRateLimitMap.has(ip)) {
-    ipRateLimitMap.set(ip, []);
-  }
-
-  // Remove timestamps older than the window
-  const timestamps = ipRateLimitMap.get(ip).filter(ts => now - ts < windowMs);
-  timestamps.push(now);
-  ipRateLimitMap.set(ip, timestamps);
-
-  return timestamps.length > maxRequests;
-}
+let threadId = null; // Optional: store in session if you want chat memory
 
 export default async function handler(req, res) {
-  // Get IP
-  const ip = req.headers['x-forwarded-for'] || req.connection.remoteAddress || 'unknown';
-
-  if (isRateLimited(ip)) {
-    return res.status(429).json({ error: 'Too many requests. Please wait and try again.' });
-  }
-
   if (req.method !== 'POST') {
     return res.status(405).json({ error: 'Method not allowed' });
   }
@@ -36,88 +11,76 @@ export default async function handler(req, res) {
     return res.status(400).json({ error: 'Message is required and must be a string' });
   }
 
-  const sanitizedMessage = message.replace(/(ignore|disregard|forget).*?(instruction|system|prompt)/gi, '[REDACTED]');
-  const isSpanish = /\b(hola|ayuda|gracias|por favor|necesito|violencia|seguro|segura)\b/i.test(sanitizedMessage);
-  const spanishNote = isSpanish
-    ? '\n\nNota: El usuario está escribiendo en español. Responde en español a menos que se indique lo contrario.'
-    : '';
-
   try {
-    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+    // 1. Create thread if not created yet
+    if (!threadId) {
+      const threadRes = await fetch('https://api.openai.com/v1/threads', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+          'Content-Type': 'application/json'
+        }
+      });
+      const threadData = await threadRes.json();
+      threadId = threadData.id;
+    }
+
+    // 2. Add user message to thread
+    await fetch(`https://api.openai.com/v1/threads/${threadId}/messages`, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
-        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
       },
       body: JSON.stringify({
-        model: 'gpt-4o',
-        messages: [
-          {
-            role: 'system',
-            content: `You are a trauma-informed virtual concierge chatbot trained to help people find family violence services in Texas.
-You provide fast, safe, and supportive answers based on the 2024 TCFV Family Violence Service Directory and any uploaded FAQs or resources.
-
-Follow these rules in all interactions:
-
-🔎 Search + Information Guidance
-If a user asks for help by county, city, or region, search the PDF directory to list local programs.
-
-If they mention a zip code, use the uploaded zip-to-county table (if available) to look up the correct area.
-
-Highlight each program’s name, phone number, crisis line, text line (if listed), and website.
-
-Clarify the type of services offered, using the icon key:
-
-24HR = 24-Hour Emergency Shelter  
-TH = Transitional Housing  
-SA = Sexual Assault Program  
-NR = Nonresidential Center  
-CAC = Children’s Advocacy Center  
-CCR = Coordinated Community Response  
-FVSP = Family Violence Service Provider  
-BIPP = Battering Intervention and Prevention Program  
-CP = Community Partner  
-HHSC = Funded by Texas Health & Human Services  
-CJAD = Funded by Criminal Justice Assistance Division
-
-🧡 Trauma-Informed Language
-Use calm, warm, and empowering language.
-
-Never pressure a user to share more than they want.
-
-Acknowledge that they may be in crisis or helping someone who is.
-
-If the user says they are afraid, unsafe, or at risk, gently suggest they call 911 or a 24/7 crisis line.
-
-If a user prefers texting or doesn’t want to call, prioritize services with text support.
-
-💬 FAQs and Definitions
-If a user asks about general questions (e.g., “What happens at a shelter?”, “Can I bring my kids?”), provide plain-language answers from the uploaded trauma-informed FAQs file.
-
-If they ask about acronyms or codes, explain clearly using the icon legend from the PDF.
-
-If unsure about something, say so clearly and suggest they contact TCFV for personalized support.
-
-🌐 Language + Accessibility
-If the user begins speaking in Spanish, switch to Spanish unless asked otherwise.
-
-Keep your responses readable and brief—use bullet points and short paragraphs.
-
-Always provide links and phone numbers in the response.${spanishNote}`
-          },
-          {
-            role: 'user',
-            content: sanitizedMessage
-          }
-        ]
+        role: 'user',
+        content: message
       })
     });
 
-    const data = await response.json();
-    const reply = data.choices?.[0]?.message?.content?.trim() || 'TCFV Assistant: Sorry, I could not generate a response.';
+    // 3. Run the assistant using your Assistant ID
+    const runRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs`, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${process.env.OPENAI_API_KEY}`,
+        'Content-Type': 'application/json'
+      },
+      body: JSON.stringify({
+        assistant_id: 'asst_jKfwAJceQdVe0J9YEUtSkVuu',
+        instructions: "Answer using trauma-informed language. Prioritize file knowledge first."
+      })
+    });
+
+    const runData = await runRes.json();
+    const runId = runData.id;
+
+    // 4. Poll for completion
+    let status = 'in_progress';
+    while (status !== 'completed' && status !== 'failed') {
+      const statusRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/runs/${runId}`, {
+        headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+      });
+      const statusData = await statusRes.json();
+      status = statusData.status;
+
+      if (status === 'in_progress') {
+        await new Promise(resolve => setTimeout(resolve, 1000)); // wait 1s
+      }
+    }
+
+    // 5. Get the assistant's latest message
+    const messagesRes = await fetch(`https://api.openai.com/v1/threads/${threadId}/messages`, {
+      headers: { Authorization: `Bearer ${process.env.OPENAI_API_KEY}` }
+    });
+
+    const messagesData = await messagesRes.json();
+    const reply = messagesData.data
+      .reverse()
+      .find(m => m.role === 'assistant')?.content[0]?.text?.value || 'No response from assistant.';
+
     res.status(200).json({ reply });
   } catch (error) {
-    console.error('Internal error:', error);
+    console.error('Assistants API error:', error);
     res.status(500).json({ error: 'Internal server error' });
   }
 }
